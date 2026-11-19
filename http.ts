@@ -45,3 +45,7 @@ export function pathOf(req: IncomingMessage): string {
 export function queryOf(req: IncomingMessage): URLSearchParams {
   try { return new URL(req.url ?? '/', 'http://entry').searchParams; } catch { return new URLSearchParams(); }
 }
+
+/** Bumped by every non-GET request: cached read bodies are valid only within one epoch. */
+export let epoch = 0;
+export const bumpEpoch = (): void => { epoch++; };

@@ -2,14 +2,17 @@
 // separate modules (rest.ts, git.ts, graphql.ts, mcp.ts), each exporting handle(req, res) that returns
 // true once it has answered. main.ts is the entry <-> env lifecycle and stays as the starter ships it.
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import { pathOf, sendError, sendJson } from './http.ts';
+import { bumpEpoch, sendError, sendJson } from './http.ts';
 import { handle as handleGit } from './git.ts';
 import { handle as handleGraphql } from './graphql.ts';
 import { handle as handleMcp } from './mcp.ts';
 import { handle as handleRest } from './rest.ts';
 
 async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  const path = pathOf(req);
+  const u = req.url ?? '/';
+  const qi = u.indexOf('?');
+  const path = qi < 0 ? u : u.slice(0, qi);
+  if (req.method !== 'GET' && req.method !== 'HEAD') bumpEpoch();
   if (req.method === 'GET' && path === '/healthz') return void sendJson(res, 200, { ok: true });
   if (path === '/api/v3' || path.startsWith('/api/v3/')) {
     if (await handleRest(req, res)) return;
@@ -23,10 +26,12 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
 
 /** Build the server. It binds nothing until the caller listens; the entry listens on an ephemeral port. */
 export function createApp(): Server {
-  return createServer((req, res) => {
+  const server = createServer({ keepAliveTimeout: 65000 }, (req, res) => {
     route(req, res).catch((err: unknown) => {
       if (!res.headersSent) sendError(res, 500, `Server Error: ${err instanceof Error ? err.message : String(err)}`);
       else res.end();
     });
   });
+  server.on('connection', (sock) => sock.setNoDelay(true));
+  return server;
 }

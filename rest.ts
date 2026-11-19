@@ -1,6 +1,6 @@
 // The REST v3 surface: routing, JSON bodies, pagination headers. All logic lives in domain.ts.
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { authorized, nextRequestId, readBody, sendError, sendJson } from './http.ts';
+import { authorized, epoch, JSON_TYPE, nextRequestId, readBody, sendError, sendJson } from './http.ts';
 import * as d from './domain.ts';
 import { viewerLogin } from './store.ts';
 
@@ -48,6 +48,8 @@ function sendPage(res: ServerResponse, origin: string, url: URL, o: d.PageOpts, 
   return true;
 }
 
+const issueCache = new Map<string, { epoch: number; text: string; len: number }>();
+
 export async function handle(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
   const method = req.method ?? 'GET';
   const host = req.headers.host ?? 'localhost';
@@ -74,6 +76,15 @@ export async function handle(req: IncomingMessage, res: ServerResponse): Promise
   }
   const q = url.searchParams;
   const o = paging(q);
+  const cacheKey = method === 'GET' ? `${origin}${url.pathname}` : '';
+  if (cacheKey !== '') {
+    const hit = issueCache.get(cacheKey);
+    if (hit !== undefined && hit.epoch === epoch) {
+      res.writeHead(200, { 'content-type': JSON_TYPE, 'content-length': hit.len, 'x-github-request-id': nextRequestId() });
+      res.end(hit.text);
+      return true;
+    }
+  }
 
   if (segs[0] === 'user') {
     if (segs.length === 1 && method === 'GET') return send(res, d.userJson(viewerLogin()));
@@ -140,7 +151,17 @@ export async function handle(req: IncomingMessage, res: ServerResponse): Promise
     const n = num(tail[1]);
     if (n === null) return notFound(res);
     if (tail.length === 2) {
-      if (method === 'GET') return send(res, d.getIssue(owner, name, n));
+      if (method === 'GET') {
+        const r = d.getIssue(owner, name, n);
+        if (d.isFailure(r)) return send(res, r);
+        const text = `${JSON.stringify(r)}
+`;
+        const len = Buffer.byteLength(text);
+        issueCache.set(cacheKey, { epoch, text, len });
+        res.writeHead(200, { 'content-type': JSON_TYPE, 'content-length': len, 'x-github-request-id': nextRequestId() });
+        res.end(text);
+        return true;
+      }
       if (method === 'PATCH') return send(res, d.updateIssue(owner, name, n, body));
       return notFound(res);
     }

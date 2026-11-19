@@ -227,7 +227,26 @@ function fetchV2(repo: Repo, args: string[]): Buffer {
   return Buffer.concat(out);
 }
 
+const fetchCache = new WeakMap<Repo, Map<string, Buffer>>();
+
 function uploadPack(repo: Repo, body: Buffer): Buffer {
+  const key = body.toString('latin1');
+  const cacheable = key.includes('command=fetch') && !key.includes('have ');
+  if (cacheable) {
+    const hit = fetchCache.get(repo)?.get(key);
+    if (hit !== undefined) return hit;
+  }
+  const out = uploadPackRaw(repo, body);
+  if (cacheable && out.includes('packfile')) {
+    let m = fetchCache.get(repo);
+    if (m === undefined) { m = new Map(); fetchCache.set(repo, m); }
+    if (m.size >= 32) m.clear();
+    m.set(key, out);
+  }
+  return out;
+}
+
+function uploadPackRaw(repo: Repo, body: Buffer): Buffer {
   const { pkts } = parsePkts(body);
   const lines: string[] = [];
   let args: string[] = [];
